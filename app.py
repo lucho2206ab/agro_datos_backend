@@ -1,50 +1,54 @@
-# app.py (Ejemplo simplificado)
 from flask import Flask, request, jsonify
 import psycopg2
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+import pytz # Librería para manejo de zonas horarias
 
 load_dotenv()
 app = Flask(__name__)
 
-# Función para conectar a Supabase
 def get_db_connection():
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS")
-    )
-    return conn
+    db_host = os.getenv("DB_HOST")
+    db_pass = os.getenv("DB_PASS")
+    db_user = os.getenv("DB_USER")
+    db_name = os.getenv("DB_NAME")
+    db_port = os.getenv("DB_PORT")
+    
+    connection_uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
+    return psycopg2.connect(connection_uri)
 
-# API Endpoint para recibir datos del sensor (POST request)
 @app.route('/api/lectura', methods=['POST'])
 def recibir_lectura():
-    # 1. Obtener datos del cuerpo de la solicitud (Arduino)
     data = request.get_json()
     
-    # Validaciones (Asegúrate que estos campos existen en el JSON del Arduino)
     sensor_id = data.get('sensor_id')
     humedad = data.get('humedad')
-    temperatura = data.get('temperatura')
-    # fecha_hora lo registraremos en el servidor para mayor precisión
+    temperatura = data.get('temperatura', 25.0) 
     
-    if not all([sensor_id, humedad, temperatura]):
+    if not all([sensor_id, humedad]):
         return jsonify({"error": "Faltan datos requeridos"}), 400
+
+    # 🕒 OBTENER HORA DE ARGENTINA EN PYTHON
+    # Esto es más fiable que delegarlo al SQL en servidores compartidos
+    tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
+    fecha_hora_ar = datetime.now(tz_ar)
 
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
-        # 2. Insertar datos en la tabla 'lecturas_sensores'
-        # ¡IMPORTANTE! Ajusta esta consulta a la estructura exacta de tu tabla
+        # Insertamos la variable generada en Python directamente
         sql = """
         INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
-        VALUES (%s, NOW() AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires', %s, %s);
+        VALUES (%s, %s, %s, %s);
         """
-        cur.execute(sql, (sensor_id, humedad, temperatura))
+        cur.execute(sql, (sensor_id, fecha_hora_ar, humedad, temperatura))
         conn.commit()
-        return jsonify({"mensaje": "Datos guardados en horario local"}), 201
+        return jsonify({
+            "mensaje": "Datos guardados", 
+            "hora_registrada": fecha_hora_ar.strftime('%Y-%m-%d %H:%M:%S')
+        }), 201
 
     except Exception as e:
         conn.rollback()
@@ -54,5 +58,6 @@ def recibir_lectura():
         conn.close()
 
 if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
-    app.run(debug=True) # debug=True solo para desarrollo

@@ -40,11 +40,11 @@ def recibir_lectura():
         # ¡IMPORTANTE! Ajusta esta consulta a la estructura exacta de tu tabla
         sql = """
         INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
-        VALUES (%s, NOW(), %s, %s);
+        VALUES (%s, NOW() AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires', %s, %s);
         """
         cur.execute(sql, (sensor_id, humedad, temperatura))
         conn.commit()
-        return jsonify({"mensaje": "Datos recibidos e insertados correctamente"}), 201
+        return jsonify({"mensaje": "Datos guardados en horario local"}), 201
 
     except Exception as e:
         conn.rollback()
@@ -54,4 +54,5 @@ def recibir_lectura():
         conn.close()
 
 if __name__ == '__main__':
+
     app.run(debug=True) # debug=True solo para desarrollo

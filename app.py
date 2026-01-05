@@ -26,8 +26,8 @@ def recibir_lectura():
     humedad = data.get('humedad')
     temperatura = data.get('temperatura', 25.0) 
     
-    if not all([sensor_id, humedad]):
-        return jsonify({"error": "Faltan datos requeridos"}), 400
+    if sensor_id is None or humedad is None:
+    return jsonify({"error": "Faltan datos requeridos"}), 400
 
     # 🕒 OBTENER HORA DE ARGENTINA EN PYTHON
     # Esto es más fiable que delegarlo al SQL en servidores compartidos
@@ -60,4 +60,5 @@ def recibir_lectura():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 

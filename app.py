@@ -5,27 +5,22 @@ import os
 from datetime import datetime
 import pytz 
 
-# Carga las variables del archivo .env
 load_dotenv()
 
 app = Flask(__name__)
 
 def get_db_connection():
-    """Establece la conexión a Supabase usando variables de entorno."""
     db_host = os.getenv("DB_HOST")
     db_pass = os.getenv("DB_PASS")
     db_user = os.getenv("DB_USER")
     db_name = os.getenv("DB_NAME")
     db_port = os.getenv("DB_PORT", "5432")
-    
     connection_uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
     return psycopg2.connect(connection_uri)
 
 @app.route('/api/lectura', methods=['POST'])
 def recibir_lectura():
-    """Recibe datos del sensor Wemos."""
     data = request.get_json()
-    
     if not data:
         return jsonify({"error": "No se recibió JSON"}), 400
 
@@ -36,13 +31,16 @@ def recibir_lectura():
     if sensor_id is None or humedad is None:
         return jsonify({"error": "Faltan datos requeridos"}), 400
 
-    # --- SOLUCIÓN AL DESFASAJE HORARIO ---
-    # Forzamos la zona horaria de Argentina sin importar dónde esté el servidor (Render)
+    # --- SOLUCIÓN DEFINITIVA PARA LA HORA ---
+    # 1. Calculamos la hora en Argentina
     tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
-    fecha_hora_ar = datetime.now(tz_ar)
+    ahora_ar = datetime.now(tz_ar)
     
-    # Debug para ver en los logs de Render qué hora se está procesando
-    print(f"DEBUG: Registrando lectura para Sensor {sensor_id} a las {fecha_hora_ar}")
+    # 2. ELIMINAMOS la info de zona horaria (hacerla 'naive')
+    # Esto fuerza a que se envíe "20:35" literalmente a la base de datos
+    fecha_hora_final = ahora_ar.replace(tzinfo=None)
+    
+    print(f"DEBUG: Insertando hora local argentina: {fecha_hora_final}")
 
     conn = None
     try:
@@ -53,25 +51,21 @@ def recibir_lectura():
         INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
         VALUES (%s, %s, %s, %s);
         """
-        cur.execute(sql, (sensor_id, fecha_hora_ar, humedad, temperatura))
+        cur.execute(sql, (sensor_id, fecha_hora_final, humedad, temperatura))
         conn.commit()
         cur.close()
         
         return jsonify({
             "status": "success",
-            "mensaje": "Datos guardados con hora local", 
-            "hora_servidor_ar": fecha_hora_ar.strftime('%Y-%m-%d %H:%M:%S')
+            "hora_registrada": fecha_hora_final.strftime('%Y-%m-%d %H:%M:%S')
         }), 201
 
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 if __name__ == '__main__':
-    # Render usa la variable de entorno PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)

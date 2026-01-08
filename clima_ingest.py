@@ -1,107 +1,90 @@
 import os
-import psycopg2
 import requests
-import time
-from datetime import datetime
+import psycopg2
 from dotenv import load_dotenv
+from datetime import datetime
+import pytz
 
-# Cargar variables de entorno (Localmente desde .env, en GitHub desde Secrets)
 load_dotenv()
 
-# API gratuita que no requiere Key para uso básico
-BASE_URL = "https://api.open-meteo.com/v1/forecast"
+# --- CONFIGURACIÓN ---
+# Coordenadas de Luján de Cuyo
+LAT = -33.035
+LON = -68.877
+PARCELA_ID = 1 
 
 def get_db_connection():
-    """Establece conexión con Supabase usando variables de entorno."""
     db_host = os.getenv("DB_HOST")
     db_pass = os.getenv("DB_PASS")
     db_user = os.getenv("DB_USER")
     db_name = os.getenv("DB_NAME")
-    db_port = os.getenv("DB_PORT")
+    db_port = os.getenv("DB_PORT", "5432")
+    uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
+    return psycopg2.connect(uri)
 
-    connection_uri = (
-        f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-        "?sslmode=require"
-    )
-    return psycopg2.connect(connection_uri)
-
-def obtener_coordenadas_parcelas(conn):
-    """Obtiene el ID y el centro geográfico de cada parcela usando PostGIS."""
-    with conn.cursor() as cur:
-        sql = """
-            SELECT 
-                p.id_parcela,
-                p.nombre_parcela,
-                ST_Y(ST_Centroid(gp.geometria_poligono)) as latitud,
-                ST_X(ST_Centroid(gp.geometria_poligono)) as longitud
-            FROM parcelas p
-            JOIN geolocalizacion_parcelas gp ON p.id_parcela = gp.parcela_id;
-        """
-        try:
-            cur.execute(sql)
-            return cur.fetchall()
-        except Exception as e:
-            print(f"❌ Error consultando coordenadas: {e}")
-            return []
-
-def consultar_clima(lat, lon):
-    """Llama a la API de Open-Meteo para obtener temperatura y lluvia."""
-    params = {
-        'latitude': lat,
-        'longitude': lon,
-        'current_weather': 'true',
-        'timezone': 'auto'
-    }
+def obtener_clima_open_meteo():
+    """
+    Obtiene clima actual desde Open-Meteo (Sin necesidad de API Key).
+    """
+    print(f"Solicitando clima a Open-Meteo para Luján de Cuyo...")
+    # Solicitamos temperatura actual y precipitación de la última hora
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,precipitation,relative_humidity_2m&timezone=America%2FArgentina%2FBuenos_Aires"
+    
     try:
-        r = requests.get(BASE_URL, params=params)
-        r.raise_for_status()
-        data = r.json()
-        return {
-            'temp': data['current_weather']['temperature'],
-            'lluvia': data.get('current_weather', {}).get('precipitation', 0.0)
-        }
+        response = requests.get(url, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            current = data.get('current', {})
+            
+            temp = current.get('temperature_2m')
+            lluvia_mm = current.get('precipitation', 0.0)
+            humedad = current.get('relative_humidity_2m')
+            
+            print(f"--- Datos Obtenidos ---")
+            print(f"Temperatura: {temp}°C")
+            print(f"Lluvia detectada: {lluvia_mm}mm")
+            print(f"Humedad aire: {humedad}%")
+            
+            return {
+                "temp": temp,
+                "lluvia": lluvia_mm,
+                "humedad": humedad
+            }
+        else:
+            print(f"Error Open-Meteo: {response.status_code}")
+            return None
     except Exception as e:
-        print(f"⚠️ Error en API de Clima: {e}")
+        print(f"Error de conexión: {e}")
         return None
 
-def guardar_datos(conn, parcela_id, clima):
-    """Inserta la lectura de clima en la base de datos."""
-    sql = """
-        INSERT INTO dato_clima (parcela_id, fecha_hora, temperatura_c, precipitacion_mm)
-        VALUES (%s, NOW(), %s, %s)
-    """
-    with conn.cursor() as cur:
-        try:
-            cur.execute(sql, (parcela_id, clima['temp'], clima['lluvia']))
-            conn.commit()
-            print(f"   ✅ Guardado: {clima['temp']}°C | {clima['lluvia']}mm")
-        except Exception as e:
-            conn.rollback()
-            print(f"   ❌ Error al guardar: {e}")
+def guardar_clima():
+    clima = obtener_clima_open_meteo()
+    if not clima or clima['temp'] is None:
+        print("❌ No se pudieron obtener datos válidos.")
+        return
 
-def main():
-    print(f"--- INICIO INGESTA CLIMA ({datetime.now()}) ---")
+    tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
+    ahora = datetime.now(tz_ar)
+
+    conn = None
     try:
         conn = get_db_connection()
-        parcelas = obtener_coordenadas_parcelas(conn)
+        cur = conn.cursor()
         
-        if not parcelas:
-            print("📭 No se encontraron parcelas con geolocalización.")
-            return
-
-        for id_p, nombre, lat, lon in parcelas:
-            print(f"🌍 Procesando {nombre}...")
-            datos_clima = consultar_clima(lat, lon)
-            if datos_clima:
-                guardar_datos(conn, id_p, datos_clima)
-            time.sleep(1) # Delay cortesía API
-
+        # Insertamos en dato_clima
+        # Asegúrate de que las columnas coincidan con tu tabla
+        sql = """
+        INSERT INTO dato_clima (parcela_id, fecha_hora, temperatura_c, precipitacion_mm)
+        VALUES (%s, %s, %s, %s);
+        """
+        cur.execute(sql, (PARCELA_ID, ahora, clima['temp'], clima['lluvia']))
+        conn.commit()
+        print(f"✅ Guardado en DB: {clima['lluvia']}mm de lluvia a las {ahora.strftime('%H:%M')}")
+        
     except Exception as e:
-        print(f"❌ Error crítico: {e}")
+        print(f"❌ Error DB: {e}")
     finally:
-        if 'conn' in locals() and conn:
-            conn.close()
-            print("--- PROCESO FINALIZADO ---")
+        if conn: conn.close()
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    guardar_clima()

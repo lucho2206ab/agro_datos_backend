@@ -27,7 +27,7 @@ def recibir_lectura():
 
     sensor_id = data.get('sensor_id')
     humedad = data.get('humedad')
-    temperatura = data.get('temperatura', 25.0) 
+    temperatura = data.get('temperatura') 
     
     # Validamos explícitamente contra None para permitir el valor 0
     if sensor_id is None or humedad is None:

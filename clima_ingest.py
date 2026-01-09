@@ -28,7 +28,6 @@ def obtener_clima_stormglass():
     """
     print(f"Solicitando clima a StormGlass (Luján de Cuyo)...")
     
-    # Parámetros: Temperatura del aire y Precipitación
     params = "airTemperature,precipitation"
     url = f"https://api.stormglass.io/v2/weather/point?lat={LAT}&lng={LON}&params={params}"
     
@@ -38,24 +37,27 @@ def obtener_clima_stormglass():
         response = requests.get(url, headers=headers, timeout=20)
         if response.status_code == 200:
             data = response.json()
+            if 'hours' not in data or len(data['hours']) == 0:
+                print("⚠️ StormGlass no devolvió datos para esta hora.")
+                return None
+                
             current_data = data['hours'][0]
             
-            # --- LÓGICA DE PRECIPITACIÓN ROBUSTA ---
-            # StormGlass separa por fuentes. Intentamos 'sg' (su propio modelo) o 'noaa'
+            # Lógica de extracción segura de diccionarios
             precip_dict = current_data.get('precipitation', {})
-            lluvia_mm = precip_dict.get('sg') or precip_dict.get('noaa') or 0.0
+            # Intentamos obtener de cualquier fuente disponible (sg, noaa, dwd, etc)
+            lluvia_mm = next(iter(precip_dict.values()), 0.0) if precip_dict else 0.0
             
             temp_dict = current_data.get('airTemperature', {})
-            temp = temp_dict.get('sg') or temp_dict.get('noaa') or 0.0
+            temp = next(iter(temp_dict.values()), 0.0) if temp_dict else 0.0
             
-            print(f"DEBUG: Datos crudos recibidos -> Temp: {temp}, Lluvia: {lluvia_mm}")
-            
+            print(f"DEBUG: Temp: {temp}, Lluvia: {lluvia_mm}")
             return {"temp": temp, "lluvia": lluvia_mm}
         else:
-            print(f"Error StormGlass: {response.status_code} - {response.text}")
+            print(f"❌ Error API StormGlass: {response.status_code}")
             return None
     except Exception as e:
-        print(f"Error de conexión: {e}")
+        print(f"❌ Error de conexión: {e}")
         return None
 
 def guardar_clima():
@@ -63,20 +65,20 @@ def guardar_clima():
     if not clima:
         return
 
-    # --- SOLUCIÓN HORA: TEXTO PLANO (NAIVE) ---
-    tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
-    ahora_ar = datetime.now(tz_ar)
-    
-    # Formateamos como STRING. Esto evita que la DB aplique zonas horarias.
-    # Resultado esperado: '2024-05-20 20:35:00'
-    fecha_str = ahora_ar.strftime('%Y-%m-%d %H:%M:%S')
+    # --- HORA LOCAL COMO TEXTO (NAIVE) ---
+    try:
+        tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
+        ahora_ar = datetime.now(tz_ar)
+        fecha_str = ahora_ar.strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        print(f"Error calculando zona horaria: {e}")
+        fecha_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Al pasar fecha_str como string, Postgres lo toma literal
         sql = """
         INSERT INTO dato_clima (parcela_id, fecha_hora, temperatura_c, precipitacion_mm)
         VALUES (%s, %s, %s, %s);
@@ -84,10 +86,7 @@ def guardar_clima():
         cur.execute(sql, (PARCELA_ID, fecha_str, clima['temp'], clima['lluvia']))
         conn.commit()
         
-        print(f"✅ REGISTRO EXITOSO")
-        print(f"📍 Parcela: {PARCELA_ID}")
-        print(f"🕒 Hora local guardada: {fecha_str}")
-        print(f"🌧️ Lluvia: {clima['lluvia']} mm")
+        print(f"✅ REGISTRO EXITOSO: {fecha_str} | Lluvia: {clima['lluvia']}mm")
         
     except Exception as e:
         print(f"❌ Error DB: {e}")

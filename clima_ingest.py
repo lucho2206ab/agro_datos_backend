@@ -8,7 +8,6 @@ import pytz
 load_dotenv()
 
 # --- CONFIGURACIÓN ---
-# Coordenadas de Luján de Cuyo
 LAT = -33.035
 LON = -68.877
 PARCELA_ID = 1 
@@ -24,10 +23,10 @@ def get_db_connection():
 
 def obtener_clima_open_meteo():
     """
-    Obtiene clima actual desde Open-Meteo (Sin necesidad de API Key).
+    Obtiene clima actual desde Open-Meteo.
     """
-    print(f"Solicitando clima a Open-Meteo para Luján de Cuyo...")
-    # Solicitamos temperatura actual y precipitación de la última hora
+    print(f"Solicitando clima a Open-Meteo (Luján de Cuyo)...")
+    # Usamos la API 'current' con temperatura y precipitación
     url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,precipitation,relative_humidity_2m&timezone=America%2FArgentina%2FBuenos_Aires"
     
     try:
@@ -37,18 +36,14 @@ def obtener_clima_open_meteo():
             current = data.get('current', {})
             
             temp = current.get('temperature_2m')
+            # Open-Meteo devuelve la precipitación en mm
             lluvia_mm = current.get('precipitation', 0.0)
-            humedad = current.get('relative_humidity_2m')
             
-            print(f"--- Datos Obtenidos ---")
-            print(f"Temperatura: {temp}°C")
-            print(f"Lluvia detectada: {lluvia_mm}mm")
-            print(f"Humedad aire: {humedad}%")
+            print(f"DEBUG API: Temp={temp}, Lluvia={lluvia_mm}mm")
             
             return {
                 "temp": temp,
-                "lluvia": lluvia_mm,
-                "humedad": humedad
+                "lluvia": lluvia_mm
             }
         else:
             print(f"Error Open-Meteo: {response.status_code}")
@@ -60,29 +55,31 @@ def obtener_clima_open_meteo():
 def guardar_clima():
     clima = obtener_clima_open_meteo()
     if not clima or clima['temp'] is None:
-        print("❌ No se pudieron obtener datos válidos.")
+        print("❌ No se obtuvieron datos válidos.")
         return
 
+    # --- SOLUCIÓN HORA ARGENTINA (Igual que app.py) ---
     tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
-    ahora = datetime.now(tz_ar)
+    ahora_ar = datetime.now(tz_ar)
+    # Convertimos a 'naive' (sin zona horaria) para que la DB guarde literal
+    fecha_hora_final = ahora_ar.replace(tzinfo=None)
 
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Insertamos en dato_clima
-        # Asegúrate de que las columnas coincidan con tu tabla
         sql = """
         INSERT INTO dato_clima (parcela_id, fecha_hora, temperatura_c, precipitacion_mm)
         VALUES (%s, %s, %s, %s);
         """
-        cur.execute(sql, (PARCELA_ID, ahora, clima['temp'], clima['lluvia']))
+        cur.execute(sql, (PARCELA_ID, fecha_hora_final, clima['temp'], clima['lluvia']))
         conn.commit()
-        print(f"✅ Guardado en DB: {clima['lluvia']}mm de lluvia a las {ahora.strftime('%H:%M')}")
+        print(f"✅ Guardado: {clima['temp']}°C y {clima['lluvia']}mm a las {fecha_hora_final.strftime('%H:%M:%S')}")
         
     except Exception as e:
         print(f"❌ Error DB: {e}")
+        if conn: conn.rollback()
     finally:
         if conn: conn.close()
 

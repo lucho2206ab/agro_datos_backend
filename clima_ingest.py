@@ -11,6 +11,8 @@ load_dotenv()
 LAT = -33.035
 LON = -68.877
 PARCELA_ID = 1 
+# Tu nueva API Key de StormGlass
+STORMGLASS_API_KEY = "aabe22e4-ecf6-11f0-a0d3-0242ac130003-aabe2384-ecf6-11f0-a0d3-0242ac130003"
 
 def get_db_connection():
     db_host = os.getenv("DB_HOST")
@@ -21,47 +23,58 @@ def get_db_connection():
     uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
     return psycopg2.connect(uri)
 
-def obtener_clima_open_meteo():
+def obtener_clima_stormglass():
     """
-    Obtiene clima actual desde Open-Meteo.
+    Obtiene clima actual desde StormGlass.io.
     """
-    print(f"Solicitando clima a Open-Meteo (Luján de Cuyo)...")
-    # Usamos la API 'current' con temperatura y precipitación
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,precipitation,relative_humidity_2m&timezone=America%2FArgentina%2FBuenos_Aires"
+    print(f"Solicitando clima a StormGlass (Luján de Cuyo)...")
+    
+    # StormGlass requiere definir qué parámetros queremos
+    params = "airTemperature,precipitation"
+    url = f"https://api.stormglass.io/v2/weather/point?lat={LAT}&lng={LON}&params={params}"
+    
+    headers = {
+        'Authorization': STORMGLASS_API_KEY
+    }
     
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, headers=headers, timeout=20)
         if response.status_code == 200:
             data = response.json()
-            current = data.get('current', {})
+            # StormGlass devuelve una lista de horas. Tomamos la primera (la más actual)
+            current_data = data['hours'][0]
             
-            temp = current.get('temperature_2m')
-            # Open-Meteo devuelve la precipitación en mm
-            lluvia_mm = current.get('precipitation', 0.0)
+            # Los valores vienen en diccionarios por fuente (usualmente 'noaa' o 'sg')
+            # Intentamos obtener el valor de la fuente 'sg' o el primero disponible
+            temp = current_data.get('airTemperature', {}).get('noaa', 0.0)
+            lluvia_mm = current_data.get('precipitation', {}).get('noaa', 0.0)
             
-            print(f"DEBUG API: Temp={temp}, Lluvia={lluvia_mm}mm")
+            print(f"DEBUG API StormGlass: Temp={temp}°C, Lluvia={lluvia_mm}mm")
             
             return {
                 "temp": temp,
                 "lluvia": lluvia_mm
             }
         else:
-            print(f"Error Open-Meteo: {response.status_code}")
+            print(f"Error StormGlass: {response.status_code} - {response.text}")
             return None
     except Exception as e:
-        print(f"Error de conexión: {e}")
+        print(f"Error de conexión con StormGlass: {e}")
         return None
 
 def guardar_clima():
-    clima = obtener_clima_open_meteo()
-    if not clima or clima['temp'] is None:
-        print("❌ No se obtuvieron datos válidos.")
+    clima = obtener_clima_stormglass()
+    if not clima:
+        print("❌ No se obtuvieron datos de StormGlass.")
         return
 
-    # --- SOLUCIÓN HORA ARGENTINA (Igual que app.py) ---
+    # --- SOLUCIÓN HORA ARGENTINA DEFINITIVA ---
+    # 1. Obtenemos la hora en la zona horaria de Argentina
     tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
     ahora_ar = datetime.now(tz_ar)
-    # Convertimos a 'naive' (sin zona horaria) para que la DB guarde literal
+    
+    # 2. IMPORTANTE: Eliminamos la información de zona horaria (hacerla 'naive')
+    # Esto evita que la base de datos intente corregir o sumar horas según el servidor
     fecha_hora_final = ahora_ar.replace(tzinfo=None)
 
     conn = None
@@ -75,7 +88,8 @@ def guardar_clima():
         """
         cur.execute(sql, (PARCELA_ID, fecha_hora_final, clima['temp'], clima['lluvia']))
         conn.commit()
-        print(f"✅ Guardado: {clima['temp']}°C y {clima['lluvia']}mm a las {fecha_hora_final.strftime('%H:%M:%S')}")
+        print(f"✅ Guardado en DB: {clima['temp']}°C y {clima['lluvia']}mm")
+        print(f"⏰ Hora registrada (AR): {fecha_hora_final.strftime('%Y-%m-%d %H:%M:%S')}")
         
     except Exception as e:
         print(f"❌ Error DB: {e}")

@@ -8,8 +8,8 @@ import pytz
 load_dotenv()
 
 # --- CONFIGURACIÓN ---
-LAT = -33.035
-LON = -68.877
+LAT = -33.0100
+LON = -68.8667
 PARCELA_ID = 1 
 STORMGLASS_API_KEY = "aabe22e4-ecf6-11f0-a0d3-0242ac130003-aabe2384-ecf6-11f0-a0d3-0242ac130003"
 

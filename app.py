@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import psycopg2
 from dotenv import load_dotenv
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz 
 
 load_dotenv()
@@ -24,44 +24,53 @@ def recibir_lectura():
     if not data:
         return jsonify({"error": "No se recibió JSON"}), 400
 
-    sensor_id = data.get('sensor_id')
-    humedad = data.get('humedad')
-    temperatura = data.get('temperatura') 
-    
-    if sensor_id is None or humedad is None:
-        return jsonify({"error": "Faltan datos requeridos"}), 400
+    # Si recibimos un solo objeto, lo convertimos en lista para usar la misma lógica
+    if not isinstance(data, list):
+        payload = [data]
+    else:
+        payload = data
 
-    # --- SOLUCIÓN DEFINITIVA PARA LA HORA ---
-    # 1. Calculamos la hora en Argentina
     tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
     ahora_ar = datetime.now(tz_ar)
     
-    # 2. ELIMINAMOS la info de zona horaria (hacerla 'naive')
-    # Esto fuerza a que se envíe "20:35" literalmente a la base de datos
-    fecha_hora_final = ahora_ar.replace(tzinfo=None)
-    
-    print(f"DEBUG: Insertando hora local argentina: {fecha_hora_final}")
-
     conn = None
+    registros_exitosos = 0
+    
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        sql = """
-        INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
-        VALUES (%s, %s, %s, %s);
-        """
-        cur.execute(sql, (sensor_id, fecha_hora_final, humedad, temperatura))
+        for lectura in payload:
+            sensor_id = lectura.get('sensor_id')
+            humedad = lectura.get('humedad')
+            temperatura = lectura.get('temperatura')
+            # 'offset_segundos' es cuánto tiempo atrás ocurrió esta lectura respecto a ahora
+            offset_segundos = int(lectura.get('offset_segundos', 0)) 
+            
+            # Calculamos la hora real de esa medición específica
+            fecha_hora_lectura = ahora_ar - timedelta(seconds=offset_segundos)
+            # Quitamos la info de zona horaria para insertar en la DB (Timestamp without timezone)
+            fecha_final = fecha_hora_lectura.replace(tzinfo=None)
+
+            sql = """
+            INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
+            VALUES (%s, %s, %s, %s);
+            """
+            cur.execute(sql, (sensor_id, fecha_final, humedad, temperatura))
+            registros_exitosos += 1
+            
         conn.commit()
         cur.close()
-        
+
         return jsonify({
             "status": "success",
-            "hora_registrada": fecha_hora_final.strftime('%Y-%m-%d %H:%M:%S')
+            "mensaje": f"Se procesaron {registros_exitosos} lecturas correctamente",
+            "ultima_hora_servidor": ahora_ar.strftime('%Y-%m-%d %H:%M:%S')
         }), 201
 
     except Exception as e:
         if conn: conn.rollback()
+        print(f"Error procesando ráfaga: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if conn: conn.close()

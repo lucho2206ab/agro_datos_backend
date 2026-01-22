@@ -1,80 +1,91 @@
-from flask import Flask, request, jsonify
-import psycopg2
-from dotenv import load_dotenv
 import os
+import logging
+import psycopg2
+import pytz
 from datetime import datetime, timedelta
-import pytz 
+from flask import Flask, request, jsonify
+from functools import wraps
+from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
 
+# --- CONFIGURACIÓN Y LOGGING ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+API_KEY = os.getenv("API_KEY", "mi_clave_secreta_123")
+ALLOWED_SENSORS = [1, 2, 3, 4, 5]
+
 def get_db_connection():
-    db_host = os.getenv("DB_HOST")
-    db_pass = os.getenv("DB_PASS")
-    db_user = os.getenv("DB_USER")
-    db_name = os.getenv("DB_NAME")
-    db_port = os.getenv("DB_PORT", "5432")
-    connection_uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
-    return psycopg2.connect(connection_uri)
+    try:
+        connection = psycopg2.connect(os.getenv("DATABASE_URL") or f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASS')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}?sslmode=require")
+        return connection
+    except Exception as e:
+        logger.error(f"Error de conexión a DB: {e}")
+        return None
+
+# --- DECORADOR PARA SEGURIDAD ---
+def require_api_key(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        key = request.headers.get('X-API-Key')
+        if key and key == API_KEY:
+            return f(*args, **kwargs)
+        logger.warning(f"Intento de acceso no autorizado desde: {request.remote_addr}")
+        return jsonify({"error": "No autorizado"}), 401
+    return decorated
+
+# --- VALIDACIÓN ---
+def es_dato_valido(s_id, hum):
+    if s_id not in ALLOWED_SENSORS: return False
+    if not (0 <= hum <= 100): return False
+    return True
 
 @app.route('/api/lectura', methods=['POST'])
+@require_api_key
 def recibir_lectura():
     data = request.get_json()
     if not data:
-        return jsonify({"error": "No se recibió JSON"}), 400
+        return jsonify({"error": "No hay datos"}), 400
 
-    # Si recibimos un solo objeto, lo convertimos en lista para usar la misma lógica
-    if not isinstance(data, list):
-        payload = [data]
-    else:
-        payload = data
-
+    # Convertir a lista si es un solo objeto
+    lecturas = data if isinstance(data, list) else [data]
     tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
-    ahora_ar = datetime.now(tz_ar)
+    ahora = datetime.now(tz_ar)
     
-    conn = None
-    registros_exitosos = 0
+    conn = get_db_connection()
+    if not conn: return jsonify({"error": "Error de base de datos"}), 500
     
+    insertados = 0
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
-        
-        for lectura in payload:
-            sensor_id = lectura.get('sensor_id')
-            humedad = lectura.get('humedad')
-            temperatura = lectura.get('temperatura')
-            # 'offset_segundos' es cuánto tiempo atrás ocurrió esta lectura respecto a ahora
-            offset_segundos = int(lectura.get('offset_segundos', 0)) 
-            
-            # Calculamos la hora real de esa medición específica
-            fecha_hora_lectura = ahora_ar - timedelta(seconds=offset_segundos)
-            # Quitamos la info de zona horaria para insertar en la DB (Timestamp without timezone)
-            fecha_final = fecha_hora_lectura.replace(tzinfo=None)
+        for l in lecturas:
+            s_id = l.get('sensor_id')
+            hum = l.get('humedad')
+            # Si viene de una ráfaga, restamos el offset para tener la hora real de la medición
+            offset = l.get('offset_segundos', 0)
+            fecha_medicion = ahora - timedelta(seconds=offset)
 
-            sql = """
-            INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
-            VALUES (%s, %s, %s, %s);
-            """
-            cur.execute(sql, (sensor_id, fecha_final, humedad, temperatura))
-            registros_exitosos += 1
-            
+            if es_dato_valido(s_id, hum):
+                cur.execute(
+                    "INSERT INTO lectura_sensores (sensor_id, fecha_hora, humedad_suelo) VALUES (%s, %s, %s)",
+                    (s_id, fecha_medicion.replace(tzinfo=None), hum)
+                )
+                insertados += 1
+        
         conn.commit()
         cur.close()
-
-        return jsonify({
-            "status": "success",
-            "mensaje": f"Se procesaron {registros_exitosos} lecturas correctamente",
-            "ultima_hora_servidor": ahora_ar.strftime('%Y-%m-%d %H:%M:%S')
-        }), 201
-
+        conn.close()
+        return jsonify({"status": "ok", "insertados": insertados}), 201
     except Exception as e:
-        if conn: conn.rollback()
-        print(f"Error procesando ráfaga: {e}")
+        logger.error(f"Error al insertar: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        if conn: conn.close()
+
+@app.route('/api/salud', methods=['GET'])
+def salud():
+    return jsonify({"estado": "online", "timestamp": datetime.now().isoformat()})
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))

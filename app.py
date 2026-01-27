@@ -141,7 +141,7 @@ def recibir_lectura():
                 INSERT INTO lectura_sensores 
                 (sensor_id, fecha_hora, humedad_suelo, temperatura_ambiente)
                 VALUES (%s, %s, %s, %s)
-                RETURNING id, fecha_hora;
+                RETURNING id_lectura, fecha_hora;
                 """
                 cur.execute(sql, (sensor_id, fecha_hora, humedad, temperatura))
                 result = cur.fetchone()

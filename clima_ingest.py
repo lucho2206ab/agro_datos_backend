@@ -11,7 +11,8 @@ load_dotenv()
 LAT = -33.0100
 LON = -68.8667
 PARCELA_ID = 1 
-STORMGLASS_API_KEY = os.getenv("STORMGLASS_API_KEY", "aabe22e4-ecf6-11f0-a0d3-0242ac130003-aabe2384-ecf6-11f0-a0d3-0242ac130003")
+# Nueva API Key de OpenWeatherMap
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "1c32652573b1cc92d10e022f1c8a69b3")
 
 def get_db_connection():
     db_host = os.getenv("DB_HOST")
@@ -19,61 +20,58 @@ def get_db_connection():
     db_user = os.getenv("DB_USER")
     db_name = os.getenv("DB_NAME")
     db_port = os.getenv("DB_PORT", "5432")
+    # Aseguramos el uso de SSL para Supabase/Render
     uri = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}?sslmode=require"
     return psycopg2.connect(uri)
 
-def obtener_clima_stormglass():
+def obtener_clima_openweather():
     """
-    Obtiene clima desde StormGlass priorizando el modelo 'sg'.
+    Obtiene clima actual desde OpenWeatherMap.
+    Documentación: https://openweathermap.org/current
     """
-    print(f"Solicitando clima a StormGlass (Modelo SG)...")
+    print(f"Solicitando clima a OpenWeatherMap...")
     
-    params = "airTemperature,precipitation"
-    url = f"https://api.stormglass.io/v2/weather/point?lat={LAT}&lng={LON}&params={params}"
-    
-    headers = {'Authorization': STORMGLASS_API_KEY}
+    # Parámetros: lat, lon, api_key y units=metric (Celsius)
+    url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OPENWEATHER_API_KEY}&units=metric"
     
     try:
-        response = requests.get(url, headers=headers, timeout=20)
+        response = requests.get(url, timeout=15)
         if response.status_code == 200:
             data = response.json()
-            if 'hours' not in data or len(data['hours']) == 0:
-                print("⚠️ StormGlass no devolvió datos para esta hora.")
-                return None
-                
-            current_data = data['hours'][0]
             
-            # --- EXTRACCIÓN CON PRIORIDAD EN 'sg' ---
+            # 1. Temperatura (Celsius)
+            temp = data.get('main', {}).get('temp', 0.0)
             
-            # 1. Temperatura
-            temp_dict = current_data.get('airTemperature', {})
-            # Intentamos obtener 'sg', si no existe, tomamos el primero disponible
-            temp = temp_dict.get('sg', next(iter(temp_dict.values()), 0.0))
+            # 2. Precipitación (mm en la última hora)
+            # OpenWeather solo envía la clave 'rain' si hay lluvia registrada.
+            rain_data = data.get('rain', {})
+            lluvia_mm = rain_data.get('1h', 0.0)
             
-            # 2. Precipitación
-            precip_dict = current_data.get('precipitation', {})
-            # Intentamos obtener 'sg', si no existe, tomamos el primero disponible
-            lluvia_mm = precip_dict.get('sg', next(iter(precip_dict.values()), 0.0))
-            
-            print(f"DEBUG: Fuente SG detectada. Temp: {temp}, Lluvia: {lluvia_mm}")
+            print(f"DEBUG: Datos obtenidos. Temp: {temp}°C, Lluvia (1h): {lluvia_mm}mm")
             return {"temp": temp, "lluvia": lluvia_mm}
-        else:
-            print(f"❌ Error API StormGlass: {response.status_code}")
+        
+        elif response.status_code == 401:
+            print("❌ Error: API Key inválida o no activa aún.")
             return None
+        else:
+            print(f"❌ Error API OpenWeather: {response.status_code} - {response.text}")
+            return None
+            
     except Exception as e:
         print(f"❌ Error de conexión: {e}")
         return None
 
 def guardar_clima():
-    clima = obtener_clima_stormglass()
+    clima = obtener_clima_openweather()
     if not clima:
+        print("⚠️ No se pudo obtener datos del clima. Abortando guardado.")
         return
 
     # --- HORA LOCAL ARGENTINA ---
     try:
         tz_ar = pytz.timezone('America/Argentina/Buenos_Aires')
         ahora_ar = datetime.now(tz_ar)
-        # Convertimos a naive para la base de datos
+        # Formateamos para que Postgres lo entienda correctamente sin problemas de offset
         fecha_final = ahora_ar.replace(tzinfo=None)
     except Exception as e:
         print(f"Error calculando zona horaria: {e}")

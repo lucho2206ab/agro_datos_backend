@@ -35,7 +35,7 @@ jobs:
           DB_PORT: ${{ secrets.DB_PORT }}
           ESTACION_ID: 12
           PARCELA_ID: 1
-        run: python clima_ingest_gobierno.py
+        run: python clima_ingest.py
 
       - name: Notificar resultado
         if: always()

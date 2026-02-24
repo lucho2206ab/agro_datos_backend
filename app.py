@@ -82,6 +82,16 @@ def validar_dato(sensor_id, humedad, temperatura=None):
 
 @app.route('/api/lectura', methods=['POST'])
 @require_api_key
+
+@app.route("/")
+def home():
+    return "AgroDatos backend activo", 200
+
+
+@app.route("/ping")
+def ping():
+    return {"status": "ok"}, 200
+
 def recibir_lectura():
     """
     Endpoint para recibir datos de sensores.

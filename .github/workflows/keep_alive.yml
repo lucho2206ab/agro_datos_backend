@@ -1,0 +1,12 @@
+name: keep-alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping server
+        run: curl https://agro-datos-backend.onrender.com/ping

@@ -80,8 +80,7 @@ def validar_dato(sensor_id, humedad, temperatura=None):
     
     return True, None
 
-@app.route('/api/lectura', methods=['POST'])
-@require_api_key
+# Rutas basicas 
 
 @app.route("/")
 def home():
@@ -90,8 +89,12 @@ def home():
 
 @app.route("/ping")
 def ping():
-    return {"status": "ok"}, 200
+    return jsonify({"status": "ok"}), 200
 
+# Endpoint del sensor
+
+@app.route('/api/lectura', methods=['POST'])
+@require_api_key
 def recibir_lectura():
     """
     Endpoint para recibir datos de sensores.

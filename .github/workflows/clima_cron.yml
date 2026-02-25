@@ -3,7 +3,7 @@ name: Ingesta Clima desde Gobierno Mendoza
 on:
   # Se ejecuta cada 4 horas
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 */8 * * *'
   
   # Permite ejecución manual desde GitHub
   workflow_dispatch:
